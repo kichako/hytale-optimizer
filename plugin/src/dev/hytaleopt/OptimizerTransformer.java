@@ -14,9 +14,8 @@ import java.util.HexFormat;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
+import java.util.TreeMap;
 import java.util.concurrent.ForkJoinPool;
-import javax.annotation.Nonnull;
-import javax.annotation.Nullable;
 
 /**
  * Replaces a handful of server classes with fixed builds of the same classes.
@@ -24,17 +23,22 @@ import javax.annotation.Nullable;
  * <p>Every replacement is pinned to the SHA-256 of the vanilla class it was built from. A patch group (a class plus
  * its nested classes) is only enabled if every member still matches the HytaleServer.jar on the classpath, so a game
  * update silently turns the affected patches off instead of mixing old and new code.
+ *
+ * <p>The replacement classes either ship inside the jar (local build with build.ps1 / build.sh) or are built on
+ * first start from the bundled patches (release jar, which contains no Hypixel code), see {@link SelfPatcher}.
  */
 public final class OptimizerTransformer implements ClassTransformer {
-   private static final String PREFIX = "[HytaleOptimizer] ";
+   static final String PREFIX = "[HytaleOptimizer] ";
+   static final String VERSION = "1.0.0";
    private static final String INDEX = "hytaleopt/patches.properties";
    private static final String CLASSES = "hytaleopt/classes/";
    private final Map<String, byte[]> replacements = new HashMap<>();
 
    public OptimizerTransformer() {
       ensureCommonPoolParallelism();
+      ClassLoader own = OptimizerTransformer.class.getClassLoader();
       Properties index = new Properties();
-      try (InputStream in = OptimizerTransformer.class.getClassLoader().getResourceAsStream(INDEX)) {
+      try (InputStream in = own.getResourceAsStream(INDEX)) {
          if (in == null) {
             System.err.println(PREFIX + "Missing " + INDEX + ", no patches applied.");
             return;
@@ -47,42 +51,69 @@ public final class OptimizerTransformer implements ClassTransformer {
       }
 
       Set<String> disabled = new HashSet<>(Arrays.asList(System.getProperty("hytaleopt.disable", "").split(",")));
-      Map<String, Map<String, String>> groups = new HashMap<>();
+      Map<String, Map<String, String>> groups = new TreeMap<>();
 
       for (String internalName : index.stringPropertyNames()) {
          String[] value = index.getProperty(internalName).split(";", 2);
-         groups.computeIfAbsent(value[1], g -> new HashMap<>()).put(internalName, value[0]);
+         groups.computeIfAbsent(value[1].trim(), g -> new HashMap<>()).put(internalName, value[0].trim());
       }
 
+      // Collect the vanilla bytes of every group that matches this server version.
       ClassLoader serverLoader = ClassLoader.getSystemClassLoader();
-      groups.entrySet().stream().sorted(Map.Entry.comparingByKey()).forEach(group -> {
-         String groupName = group.getKey();
+      Map<String, Map<String, byte[]>> matching = new TreeMap<>();
+      groups.forEach((groupName, members) -> {
          if (disabled.contains(groupName)) {
             System.out.println(PREFIX + groupName + ": disabled by -Dhytaleopt.disable");
             return;
          }
 
-         Map<String, byte[]> groupClasses = new HashMap<>();
-
-         for (Map.Entry<String, String> member : group.getValue().entrySet()) {
-            String internalName = member.getKey();
-            byte[] original = readResource(serverLoader, internalName + ".class");
+         Map<String, byte[]> originals = new HashMap<>();
+         for (Map.Entry<String, String> member : members.entrySet()) {
+            byte[] original = readResource(serverLoader, member.getKey() + ".class");
             if (original == null || !sha256(original).equals(member.getValue())) {
-               System.out.println(PREFIX + groupName + ": skipped, " + internalName + " differs from the version this patch was built for");
+               System.out.println(PREFIX + groupName + ": skipped, " + member.getKey() + " differs from the version this patch was made for");
                return;
             }
 
-            byte[] replacement = readResource(OptimizerTransformer.class.getClassLoader(), CLASSES + internalName + ".class");
-            if (replacement == null) {
-               System.err.println(PREFIX + groupName + ": skipped, replacement for " + internalName + " is missing");
-               return;
-            }
-
-            groupClasses.put(internalName, replacement);
+            originals.put(member.getKey(), original);
          }
 
-         this.replacements.putAll(groupClasses);
-         System.out.println(PREFIX + groupName + ": enabled");
+         matching.put(groupName, originals);
+      });
+
+      if (matching.isEmpty()) {
+         return;
+      }
+
+      Map<String, byte[]> built;
+      String anyMember = matching.values().iterator().next().keySet().iterator().next();
+      if (own.getResource(CLASSES + anyMember + ".class") != null) {
+         built = new HashMap<>();
+         for (Map<String, byte[]> originals : matching.values()) {
+            for (String internalName : originals.keySet()) {
+               byte[] replacement = readResource(own, CLASSES + internalName + ".class");
+               if (replacement != null) {
+                  built.put(internalName, replacement);
+               }
+            }
+         }
+      } else {
+         try {
+            built = SelfPatcher.patch(matching, VERSION);
+         } catch (Throwable t) {
+            System.err.println(PREFIX + "Could not build the patched classes, starting without patches: " + t);
+            return;
+         }
+      }
+
+      // Enable a group only if every member has a replacement.
+      matching.forEach((groupName, originals) -> {
+         if (built.keySet().containsAll(originals.keySet())) {
+            originals.keySet().forEach(name -> this.replacements.put(name, built.get(name)));
+            System.out.println(PREFIX + groupName + ": enabled");
+         } else {
+            System.err.println(PREFIX + groupName + ": skipped, replacement classes are missing");
+         }
       });
    }
 
@@ -112,15 +143,13 @@ public final class OptimizerTransformer implements ClassTransformer {
       return 1000;
    }
 
-   @Nullable
    @Override
-   public byte[] transform(@Nonnull String name, @Nonnull String internalName, @Nonnull byte[] classBytes) {
+   public byte[] transform(String name, String internalName, byte[] classBytes) {
       byte[] replacement = this.replacements.get(internalName);
       return replacement == null ? null : replacement.clone();
    }
 
-   @Nullable
-   private static byte[] readResource(@Nonnull ClassLoader loader, @Nonnull String path) {
+   static byte[] readResource(ClassLoader loader, String path) {
       try (InputStream in = loader.getResourceAsStream(path)) {
          return in == null ? null : in.readAllBytes();
       } catch (IOException e) {
@@ -128,8 +157,7 @@ public final class OptimizerTransformer implements ClassTransformer {
       }
    }
 
-   @Nonnull
-   private static String sha256(@Nonnull byte[] bytes) {
+   static String sha256(byte[] bytes) {
       try {
          return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes));
       } catch (NoSuchAlgorithmException e) {

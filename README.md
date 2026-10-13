@@ -4,7 +4,7 @@ An early plugin for the Hytale server that fixes a handful of bugs and bottlenec
 
 The network protocol is untouched, so the official client connects as usual. It works on dedicated servers and in singleplayer.
 
-**Supported version:** HytaleServer 0.7.0 (revision `648ebf37`). If your server is on a different version, the build script will tell you and stop.
+**Supported version:** HytaleServer 0.7.0 (revision `648ebf37`). On any other version the patches simply stay off and the server runs as normal.
 
 ## Why
 
@@ -25,16 +25,28 @@ It started as a read-through of the server code to figure out why my VPS was str
 - **Mods that filter packets.** If a mod cancelled a packet inside a batch, the native QUIC transport threw a `NullPointerException`.
 - **Packet rate limiter.** It lost precision on every refill and could kick clients that were under the limit.
 
-## Building
+## Download
 
-There's no prebuilt `.jar`, because the fixed classes come from Hypixel's code. Instead, this repo only contains the changes (`patches/*.patch`), and the build script applies them to **your** `HytaleServer.jar`:
+Grab `HytaleOptimizer-<version>.jar` from [Releases](../../releases) and follow [Installing](#installing).
+
+The release jar doesn't contain any Hypixel code. It ships our patches (`patches/*.patch`) plus two unmodified tools: [Vineflower](https://github.com/Vineflower/vineflower) (decompiler, Apache 2.0) and [ECJ](https://github.com/eclipse-jdt/eclipse.jdt.core) (Eclipse's Java compiler, EPL 2.0). The Java runtime that comes with Hytale has no compiler of its own, hence ECJ.
+
+The first time the server starts with it, the plugin builds the fixed classes from **your** `HytaleServer.jar`:
 
 1. Checks that your jar is the supported version.
-2. Decompiles only the affected classes with [Vineflower](https://github.com/Vineflower/vineflower). The script downloads it and checks its SHA-256.
-3. Applies the patches with `git apply`.
-4. Compiles and packages the result.
+2. Decompiles only the affected classes.
+3. Applies the patches.
+4. Compiles them.
 
-You need JDK 25 or newer (`java`, `javac` and `jar`) and `git`.
+This takes a few seconds. The result is cached in `.hytaleopt-cache/` next to the plugin jar, so later starts are instant. The cache rebuilds itself when the server or the plugin changes.
+
+Releases are built by GitHub Actions straight from this repo (`build-release.sh`). Each one comes with a `.sha256` file.
+
+## Building it yourself
+
+If you'd rather not run the decompiler on your server, you can build a jar that already contains the fixed classes. You'll need JDK 25 or newer (`java`, `javac` and `jar`), `git`, and your `HytaleServer.jar`.
+
+Keep that jar to yourself, since it does contain recompiled Hypixel classes.
 
 Windows:
 
@@ -50,7 +62,7 @@ Linux:
 ./build.sh /path/to/HytaleServer.jar
 ```
 
-The output is `build/HytaleOptimizer.jar`.
+The output is `build/HytaleOptimizer.jar`. To build the release-style jar instead, run `./build-release.sh` (no `HytaleServer.jar` needed).
 
 ## Installing
 
