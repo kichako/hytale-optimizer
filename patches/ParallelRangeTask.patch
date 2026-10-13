@@ -1,0 +1,21 @@
+--- a/com/hypixel/hytale/component/task/ParallelRangeTask.java
++++ b/com/hypixel/hytale/component/task/ParallelRangeTask.java
+@@ -9,6 +9,9 @@
+ public class ParallelRangeTask<D extends IntConsumer> extends CountedCompleter<Void> {
+    public static final int PARALLELISM = Math.max(ForkJoinPool.getCommonPoolParallelism(), 1);
+    public static final int TASK_COUNT = Math.max(ForkJoinPool.getCommonPoolParallelism() << 2, 1);
++   // [hytaleopt] Minimum entities per forked sub-task. Forking (plus a CommandBuffer fork/merge) per single entity
++   // costs more than the work itself for small archetype chunks. 1 restores the vanilla split.
++   private static final int MIN_GRAIN = Math.max(Integer.getInteger("hytaleopt.minParallelGrain", 16), 1);
+    @Nonnull
+    private final ParallelRangeTask.SubTask<D>[] subTasks = new ParallelRangeTask.SubTask[TASK_COUNT];
+    private int size;
+@@ -38,7 +41,7 @@
+    @Nonnull
+    public ParallelRangeTask<D> init(int from, int to) {
+       this.reinitialize();
+-      int perTask = Math.max((to - from + (this.subTasks.length - 1)) / this.subTasks.length, 1);
++      int perTask = Math.max((to - from + (this.subTasks.length - 1)) / this.subTasks.length, MIN_GRAIN);
+ 
+       for (this.size = 0; this.size < this.subTasks.length && from < to; this.size++) {
+          int next = Math.min(from + perTask, to);

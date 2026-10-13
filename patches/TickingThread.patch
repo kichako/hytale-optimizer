@@ -1,0 +1,53 @@
+--- a/com/hypixel/hytale/server/core/util/thread/TickingThread.java
++++ b/com/hypixel/hytale/server/core/util/thread/TickingThread.java
+@@ -7,6 +7,7 @@
+ import java.util.concurrent.TimeUnit;
+ import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.concurrent.atomic.AtomicReference;
++import java.util.concurrent.locks.LockSupport;
+ import java.util.logging.Level;
+ import javax.annotation.Nonnull;
+ import javax.annotation.Nullable;
+@@ -16,16 +17,19 @@
+    public static final int NANOS_IN_ONE_SECOND = 1000000000;
+    public static final int TPS = 30;
+    public static long SLEEP_OFFSET = 3000000L;
++   // [hytaleopt] Windows park/sleep overshoot measured at ~1.2ms worst case, so 1.5ms keeps tick timing intact.
++   private static final long SPIN_THRESHOLD_NANOS = Long.getLong("hytaleopt.spinThresholdNanos", 1500000L);
+    private final String threadName;
+    private final boolean daemon;
+-   private int tps;
+-   private int tickStepNanos;
+-   private HistoricMetric bufferedTickLengthMetricSet;
++   private volatile int tps;
++   private volatile int tickStepNanos;
++   private volatile HistoricMetric bufferedTickLengthMetricSet;
+    private final AtomicReference<TickingThread.Run> currentRun = new AtomicReference<>();
++   // [hytaleopt] Written by the ticking thread, read by other threads (World.stopIndividualWorld).
+    @Nullable
+-   private PluginIdentifier possibleFailureCause;
++   private volatile PluginIdentifier possibleFailureCause;
+    @Nullable
+-   private Throwable failureException;
++   private volatile Throwable failureException;
+ 
+    public TickingThread(String threadName) {
+       this(threadName, 30, false);
+@@ -61,9 +65,16 @@
+                      delta = now - beforeTick;
+                      beforeTick = now;
+                   } else {
++                     // [hytaleopt] Park until close to the deadline and only spin for the last stretch,
++                     // instead of spinning for SLEEP_OFFSET (+ ms truncation) every tick.
+                      long now;
+                      while ((now = System.nanoTime()) - beforeTick < this.tickStepNanos) {
+-                        Thread.onSpinWait();
++                        long remaining = this.tickStepNanos - (now - beforeTick);
++                        if (remaining > SPIN_THRESHOLD_NANOS) {
++                           LockSupport.parkNanos(remaining - SPIN_THRESHOLD_NANOS);
++                        } else {
++                           Thread.onSpinWait();
++                        }
+                      }
+ 
+                      delta = now - beforeTick;

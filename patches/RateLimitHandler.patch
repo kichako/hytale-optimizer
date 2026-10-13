@@ -1,0 +1,40 @@
+--- a/com/hypixel/hytale/server/core/io/netty/RateLimitHandler.java
++++ b/com/hypixel/hytale/server/core/io/netty/RateLimitHandler.java
+@@ -4,6 +4,7 @@
+ import com.hypixel.hytale.protocol.packets.connection.QuicApplicationErrorCode;
+ import io.netty.channel.ChannelHandlerContext;
+ import io.netty.channel.ChannelInboundHandlerAdapter;
++import io.netty.util.ReferenceCountUtil;
+ import java.util.logging.Level;
+ 
+ public class RateLimitHandler extends ChannelInboundHandlerAdapter {
+@@ -26,7 +27,13 @@
+       long tokensToAdd = elapsedNanos * this.refillRate / 1000000000L;
+       if (tokensToAdd > 0L) {
+          this.tokens = (int)Math.min((long)this.maxTokens, this.tokens + tokensToAdd);
+-         this.lastRefillTime = now;
++         if (this.tokens >= this.maxTokens) {
++            this.lastRefillTime = now;
++         } else {
++            // [hytaleopt] Only consume the time that produced whole tokens. Resetting to "now" threw away the
++            // fractional remainder, so irregular traffic below PacketsPerSecond could still drain the bucket.
++            this.lastRefillTime += tokensToAdd * 1000000000L / this.refillRate;
++         }
+       }
+    }
+ 
+@@ -37,8 +44,12 @@
+          this.tokens--;
+          ctx.fireChannelRead(msg);
+       } else {
+-         LOGGER.at(Level.WARNING).log("Rate limit exceeded for %s, disconnecting", NettyUtil.formatRemoteAddress(ctx.channel()));
+-         NettyUtil.closeApplicationConnection(ctx.channel(), QuicApplicationErrorCode.RateLimited);
++         ReferenceCountUtil.release(msg);
++         // [hytaleopt] Log/close once; further packets already in the read batch were spamming the warning.
++         if (ctx.channel().isActive()) {
++            LOGGER.at(Level.WARNING).log("Rate limit exceeded for %s, disconnecting", NettyUtil.formatRemoteAddress(ctx.channel()));
++            NettyUtil.closeApplicationConnection(ctx.channel(), QuicApplicationErrorCode.RateLimited);
++         }
+       }
+    }
+ }

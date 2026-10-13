@@ -1,0 +1,7 @@
+{
+  "Group": "HytaleOptTest",
+  "Name": "InstanceRespawnTest",
+  "Version": "1.0.0",
+  "Description": "Test-only mod for HytaleOptimizer. Do not install on a real server.",
+  "Main": "hytaleopttest.InstanceRespawnTest"
+}

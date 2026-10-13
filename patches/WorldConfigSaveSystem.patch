@@ -1,0 +1,35 @@
+--- a/com/hypixel/hytale/server/core/universe/system/WorldConfigSaveSystem.java
++++ b/com/hypixel/hytale/server/core/universe/system/WorldConfigSaveSystem.java
+@@ -6,10 +6,15 @@
+ import com.hypixel.hytale.server.core.universe.world.World;
+ import com.hypixel.hytale.server.core.universe.world.WorldConfig;
+ import com.hypixel.hytale.server.core.universe.world.storage.EntityStore;
++import java.util.Map;
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.ConcurrentHashMap;
+ import javax.annotation.Nonnull;
+ 
+ public class WorldConfigSaveSystem extends DelayedSystem<EntityStore> {
++   // [hytaleopt] One system instance is shared by every world's EntityStore, so in-flight saves are tracked per world.
++   private final Map<World, CompletableFuture<Void>> inFlightSaves = new ConcurrentHashMap<>();
++
+    public WorldConfigSaveSystem() {
+       super(10.0F);
+    }
+@@ -18,7 +23,15 @@
+    public void delayedTick(float dt, int systemIndex, @Nonnull Store<EntityStore> store) {
+       World world = store.getExternalData().getWorld();
+       if (!world.isSavingLocked()) {
+-         saveWorldConfigAndResources(world).join();
++         // [hytaleopt] The documents are encoded synchronously on the world thread inside saveWorldConfigAndResources;
++         // only the disk writes are async. Joining here stalled the world tick every 10s on slow disks. Skip the
++         // cycle while the previous one is still writing (the config "changed" flag stays set until then).
++         CompletableFuture<Void> previous = this.inFlightSaves.get(world);
++         if (previous == null || previous.isDone()) {
++            CompletableFuture<Void> future = saveWorldConfigAndResources(world);
++            this.inFlightSaves.put(world, future);
++            future.whenComplete((v, t) -> this.inFlightSaves.remove(world, future));
++         }
+       }
+    }
+ 

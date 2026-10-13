@@ -1,0 +1,93 @@
+--- a/com/hypixel/hytale/server/core/io/PacketHandler.java
++++ b/com/hypixel/hytale/server/core/io/PacketHandler.java
+@@ -204,7 +204,7 @@
+    public void write(@Nonnull ToClientPacket... packets) {
+       if (packets.length != 0) {
+          ToClientPacket[] cachedPackets = new ToClientPacket[packets.length];
+-         this.handleOutboundAndCachePackets(packets, cachedPackets);
++         int sent = this.handleOutboundAndCachePackets(packets, cachedPackets);
+          NetworkChannel networkChannel = packets[0].getChannel();
+ 
+          for (int i = 1; i < packets.length; i++) {
+@@ -213,6 +213,16 @@
+             }
+          }
+ 
++         // [hytaleopt] Packets cancelled by a PacketAdapter left null holes in the array; QuicheChannel feeds the array
++         // to ConcurrentLinkedQueue.addAll, which throws NullPointerException on null elements.
++         if (sent == 0) {
++            return;
++         }
++
++         if (sent != cachedPackets.length) {
++            cachedPackets = compact(cachedPackets, sent);
++         }
++
+          ChannelConnection channel = this.channels[networkChannel.getValue()];
+          if (this.queuePackets) {
+             channel.write(cachedPackets);
+@@ -225,8 +235,13 @@
+ 
+    public void write(@Nonnull ToClientPacket[] packets, @Nonnull ToClientPacket finalPacket) {
+       ToClientPacket[] cachedPackets = new ToClientPacket[packets.length + 1];
+-      this.handleOutboundAndCachePackets(packets, cachedPackets);
+-      cachedPackets[cachedPackets.length - 1] = this.handleOutboundAndCachePacket(finalPacket);
++      int sent = this.handleOutboundAndCachePackets(packets, cachedPackets);
++      // [hytaleopt] The final packet skipped PacketAdapters.__handleOutbound, so adapters could not see or cancel it.
++      if (!PacketAdapters.__handleOutbound(this, finalPacket)) {
++         cachedPackets[cachedPackets.length - 1] = this.handleOutboundAndCachePacket(finalPacket);
++         sent++;
++      }
++
+       NetworkChannel networkChannel = finalPacket.getChannel();
+ 
+       for (int i = 0; i < packets.length; i++) {
+@@ -235,6 +250,14 @@
+          }
+       }
+ 
++      if (sent == 0) {
++         return;
++      }
++
++      if (sent != cachedPackets.length) {
++         cachedPackets = compact(cachedPackets, sent);
++      }
++
+       ChannelConnection channel = this.channels[networkChannel.getValue()];
+       if (this.queuePackets) {
+          channel.write(cachedPackets);
+@@ -277,13 +300,32 @@
+       }
+    }
+ 
+-   private void handleOutboundAndCachePackets(@Nonnull ToClientPacket[] packets, @Nonnull ToClientPacket[] cachedPackets) {
++   private int handleOutboundAndCachePackets(@Nonnull ToClientPacket[] packets, @Nonnull ToClientPacket[] cachedPackets) {
++      int sent = 0;
++
+       for (int i = 0; i < packets.length; i++) {
+          ToClientPacket packet = packets[i];
+          if (!PacketAdapters.__handleOutbound(this, packet)) {
+             cachedPackets[i] = this.handleOutboundAndCachePacket(packet);
++            sent++;
+          }
+       }
++
++      return sent;
++   }
++
++   @Nonnull
++   private static ToClientPacket[] compact(@Nonnull ToClientPacket[] packets, int count) {
++      ToClientPacket[] compacted = new ToClientPacket[count];
++      int j = 0;
++
++      for (ToClientPacket packet : packets) {
++         if (packet != null) {
++            compacted[j++] = packet;
++         }
++      }
++
++      return compacted;
+    }
+ 
+    @Nonnull

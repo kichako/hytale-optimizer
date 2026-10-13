@@ -1,0 +1,22 @@
+--- a/com/hypixel/hytale/builtin/instances/InstancesPlugin.java
++++ b/com/hypixel/hytale/builtin/instances/InstancesPlugin.java
+@@ -293,6 +293,19 @@
+             SneakyThrow.sneakySupplier(
+                () -> {
+                   long start = System.nanoTime();
++                  // [hytaleopt] A previous copy of this instance can survive its removal (e.g. its world thread was
++                  // abandoned after 30s and kept saving, recreating the folder after it was deleted). Files.copy below
++                  // does not overwrite, so every later spawn of a fixed InstanceKey failed with
++                  // FileAlreadyExistsException until the folder was deleted by hand. The world is not loaded (checked
++                  // by spawnInstance), so the leftover folder is unreachable: move it aside and delete it.
++                  if (Files.exists(worldPath) && universe.getWorld(worldKey) == null) {
++                     Path stalePath = universe.getWorldsDeletedPath().resolve(worldPath.getFileName() + "_stale" + UUID.randomUUID().toString().substring(0, 8));
++                     this.getLogger().at(Level.WARNING).log("Removing leftover files of instance world %s before copying it again", worldKey);
++                     Files.createDirectories(stalePath.getParent());
++                     FileUtil.atomicMove(worldPath, stalePath);
++                     FileUtil.deleteDirectory(stalePath);
++                  }
++
+                   this.getLogger().at(Level.INFO).log("Copying instance files for %s to world %s", name, worldKey);
+ 
+                   try (Stream<Path> files = Files.walk(assetPath, FileUtil.DEFAULT_WALK_TREE_OPTIONS_ARRAY)) {

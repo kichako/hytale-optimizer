@@ -1,0 +1,121 @@
+--- a/com/hypixel/hytale/server/core/util/BsonUtil.java
++++ b/com/hypixel/hytale/server/core/util/BsonUtil.java
+@@ -15,12 +15,17 @@
+ import java.io.DataOutputStream;
+ import java.io.IOException;
+ import java.io.StringWriter;
++import java.io.Writer;
+ import java.nio.ByteBuffer;
++import java.nio.channels.Channels;
++import java.nio.channels.FileChannel;
++import java.nio.charset.StandardCharsets;
+ import java.nio.file.Files;
+ import java.nio.file.Path;
+ import java.nio.file.StandardOpenOption;
+ import java.nio.file.attribute.BasicFileAttributes;
+ import java.util.concurrent.CompletableFuture;
++import java.util.concurrent.ConcurrentHashMap;
+ import java.util.concurrent.ExecutorService;
+ import java.util.concurrent.Executors;
+ import java.util.logging.Level;
+@@ -53,6 +58,15 @@
+    public static final BsonDocumentCodec BSON_DOCUMENT_CODEC = new BsonDocumentCodec();
+    private static final int MAX_PARSE_DEPTH = 256;
+    private static final ExecutorService WRITE_EXECUTOR = Executors.newFixedThreadPool(4, ThreadUtil.daemonCounted("Document Writer - %d"));
++   private static final ConcurrentHashMap<Path, CompletableFuture<Void>> PENDING_WRITES = new ConcurrentHashMap<>();
++   private static final Object[] FILE_LOCKS = new Object[64];
++   private static final boolean FSYNC = !Boolean.getBoolean("hytaleopt.noFsync");
++
++   static {
++      for (int i = 0; i < FILE_LOCKS.length; i++) {
++         FILE_LOCKS[i] = new Object();
++      }
++   }
+ 
+    public static byte[] writeToBytes(@Nullable BsonDocument document) {
+       if (document == null) {
+@@ -117,12 +131,20 @@
+ 
+    @Nonnull
+    public static CompletableFuture<Void> writeDocument(@Nonnull Path file, BsonDocument document, boolean backup) {
+-      return CompletableFuture.runAsync(SneakyThrow.sneakyRunnable(() -> writeDocumentSync(file, document, backup)), WRITE_EXECUTOR)
+-         .whenComplete((result, throwable) -> {
+-            if (throwable != null) {
+-               LOGGER.at(Level.WARNING).withCause(throwable).log("Failed to write document to '%s'", file);
+-            }
+-         });
++      // [hytaleopt] Writes to the same file are chained so they run one at a time and in submission order. With 4
++      // writer threads, two saves of one file used to share "<file>.tmp" concurrently (torn file / failed move) and
++      // an older snapshot could land after a newer one.
++      Path key = file.toAbsolutePath().normalize();
++      CompletableFuture<Void> write = PENDING_WRITES.compute(key, (k, previous) -> {
++         CompletableFuture<Void> after = previous == null ? CompletableFuture.completedFuture(null) : previous.handle((v, t) -> null);
++         return after.thenRunAsync(SneakyThrow.sneakyRunnable(() -> writeDocumentSync(file, document, backup)), WRITE_EXECUTOR);
++      });
++      write.whenComplete((v, t) -> PENDING_WRITES.remove(key, write));
++      return write.whenComplete((result, throwable) -> {
++         if (throwable != null) {
++            LOGGER.at(Level.WARNING).withCause(throwable).log("Failed to write document to '%s'", file);
++         }
++      });
+    }
+ 
+    private static void writeDocumentSync(@Nonnull Path file, BsonDocument document, boolean backup) throws IOException {
+@@ -132,16 +154,35 @@
+       }
+ 
+       Path tmpPath = file.resolveSibling(file.getFileName() + ".tmp");
++      Object lock = fileLock(file);
++      synchronized (lock) {
++         writeTmpDurably(tmpPath, document);
++         if (backup) {
++            FileUtil.copyToBackup(file);
++         }
+ 
+-      try (BufferedWriter writer = Files.newBufferedWriter(tmpPath, StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+-         BSON_DOCUMENT_CODEC.encode(new JsonWriter(writer, SETTINGS), document, encoderContext);
++         FileUtil.atomicMove(tmpPath, file);
+       }
++   }
+ 
+-      if (backup) {
+-         FileUtil.copyToBackup(file);
++   // [hytaleopt] Flush the temp file to disk before the rename. Without it a power loss/crash can leave the renamed
++   // file empty or truncated (the "file was found to be entirely empty" path in readDocument).
++   private static void writeTmpDurably(@Nonnull Path tmpPath, BsonDocument document) throws IOException {
++      try (FileChannel channel = FileChannel.open(tmpPath, StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
++         Writer writer = new BufferedWriter(Channels.newWriter(channel, StandardCharsets.UTF_8));
++         BSON_DOCUMENT_CODEC.encode(new JsonWriter(writer, SETTINGS), document, encoderContext);
++         writer.flush();
++         if (FSYNC) {
++            channel.force(true);
++         }
+       }
++   }
+ 
+-      FileUtil.atomicMove(tmpPath, file);
++   // [hytaleopt] Striped locks so writeSync (caller thread) and writeDocument (writer pool) never share a .tmp file.
++   @Nonnull
++   private static Object fileLock(@Nonnull Path file) {
++      int h = file.toAbsolutePath().normalize().hashCode();
++      return FILE_LOCKS[(h ^ h >>> 16) & FILE_LOCKS.length - 1];
+    }
+ 
+    @Nonnull
+@@ -261,12 +302,10 @@
+       extraInfo.getValidationResults().logOrThrowValidatorExceptions(logger);
+       BsonDocument document = bsonValue.asDocument();
+       Path tmpPath = path.resolveSibling(path.getFileName() + ".tmp");
+-
+-      try (BufferedWriter writer = Files.newBufferedWriter(tmpPath, StandardOpenOption.WRITE, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
+-         BSON_DOCUMENT_CODEC.encode(new JsonWriter(writer, SETTINGS), document, encoderContext);
++      synchronized (fileLock(path)) {
++         writeTmpDurably(tmpPath, document);
++         FileUtil.copyToBackup(path);
++         FileUtil.atomicMove(tmpPath, path);
+       }
+-
+-      FileUtil.copyToBackup(path);
+-      FileUtil.atomicMove(tmpPath, path);
+    }
+ }

@@ -1,0 +1,24 @@
+--- a/com/hypixel/hytale/component/task/ParallelTask.java
++++ b/com/hypixel/hytale/component/task/ParallelTask.java
+@@ -79,12 +79,16 @@
+          this.subTasks[i].running = true;
+       }
+ 
+-      this.invoke();
++      // [hytaleopt] Always reset the flags: if a parallel system throws, the flags used to stay true and every
++      // later init()/appendTask() on this Store failed with "Parallel task has already been started".
++      try {
++         this.invoke();
++      } finally {
++         for (int i = 0; i < this.size; i++) {
++            this.subTasks[i].running = false;
++         }
+ 
+-      for (int i = 0; i < this.size; i++) {
+-         this.subTasks[i].running = false;
++         this.running = false;
+       }
+-
+-      this.running = false;
+    }
+ }
