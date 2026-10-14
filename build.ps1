@@ -55,7 +55,7 @@ try {
         $s = $entry.Open(); try { $s.CopyTo($ms) } finally { $s.Dispose() }
         $bytes = $ms.ToArray()
         if ((Get-Sha256 $bytes) -ne $index[$internal]) {
-            throw "$internal differs from the version these patches were made for (HytaleServer 0.7.0 / 0.7.1). This server version is not supported yet."
+            throw "$internal differs from the version these patches were made for (HytaleServer 0.7.0 - 0.7.2). This server version is not supported yet."
         }
         $dest = Join-Path $work ("classes\" + $internal.Replace('/', '\') + '.class')
         New-Item -ItemType Directory -Force (Split-Path $dest) | Out-Null

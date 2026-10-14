@@ -38,7 +38,7 @@ while IFS='=' read -r internal rest; do
     exit 1
   fi
   if [ "$(sha256sum "$WORK/classes/$internal.class" | cut -d' ' -f1)" != "$expected" ]; then
-    echo "$internal differs from the version these patches were made for (HytaleServer 0.7.0 / 0.7.1). This server version is not supported yet." >&2
+    echo "$internal differs from the version these patches were made for (HytaleServer 0.7.0 - 0.7.2). This server version is not supported yet." >&2
     exit 1
   fi
 done < "$TARGETS"

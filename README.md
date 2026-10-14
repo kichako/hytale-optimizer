@@ -4,7 +4,7 @@ An early plugin for the Hytale server that fixes a handful of bugs and bottlenec
 
 The network protocol is untouched, so the official client connects as usual. It works on dedicated servers and in singleplayer.
 
-**Supported versions:** HytaleServer 0.7.0 and 0.7.1 (the 0.7.1 hotfix did not touch any of the patched classes). On any other version the patches simply stay off and the server runs as normal.
+**Supported versions:** HytaleServer 0.7.0, 0.7.1 and 0.7.2 (the hotfixes did not touch any of the patched classes). On any other version the patches simply stay off and the server runs as normal.
 
 ## Why
 
