@@ -4,7 +4,7 @@ An early plugin for the Hytale server that fixes a handful of bugs and bottlenec
 
 The network protocol is untouched, so the official client connects as usual. It works on dedicated servers and in singleplayer.
 
-**Supported version:** HytaleServer 0.7.0 (revision `648ebf37`). On any other version the patches simply stay off and the server runs as normal.
+**Supported versions:** HytaleServer 0.7.0 and 0.7.1 (the 0.7.1 hotfix did not touch any of the patched classes). On any other version the patches simply stay off and the server runs as normal.
 
 ## Why
 
@@ -22,6 +22,7 @@ It started as a read-through of the server code to figure out why my VPS was str
 - **Lost or corrupted saves.** Two saves of the same file at once shared the same `.tmp` file and could fail or overwrite each other. Saves also weren't flushed to disk before the rename, so a power cut could leave empty files.
 - **A world that broke for good.** If a parallel task threw an exception, that world could never run parallel tasks again.
 - **Wasted CPU.** Every world with players spent about 3–4 ms per tick in a busy-wait loop. It now sleeps and only spins for the last moment. Parallel work is also no longer split into one-entity tasks.
+- **World generation fighting the game for CPU.** Terrain generation runs on 75% of the cores at normal priority. Its threads now run at the lowest priority, like the ones in Hypixel's newer generator. In singleplayer they're also capped at half the cores, since the game renders on the same machine. On a 16-core PC the server went from ~11.6 to ~9 busy cores while generating, and terrain generated about 30% slower. Dedicated servers keep the vanilla thread count unless you set `hytaleopt.worldgenThreads`.
 - **Mods that filter packets.** If a mod cancelled a packet inside a batch, the native QUIC transport threw a `NullPointerException`.
 - **Packet rate limiter.** It lost precision on every refill and could kick clients that were under the limit.
 
@@ -89,11 +90,15 @@ Every replaced class is pinned to the hash of the original. If an update changes
 
 ## Options
 
-These are Java options (`-D...`, before `-jar`). In AMP they go in *Java and Memory → Additional Java Arguments*.
+You can set these in two ways:
+
+- **As Java options** (`-D...`, before `-jar`). In AMP they go in *Java and Memory → Additional Java Arguments*.
+- **In a `hytaleopt.properties` file** next to the plugin jar, one `key=value` per line. This is the only way in singleplayer, where the game starts the server for you. If both are set, the `-D` option wins.
 
 | Option | Default | What it does |
 |---|---|---|
 | `hytaleopt.disable` | — | Turn off specific patches, comma-separated: `-Dhytaleopt.disable=TickingThread,BsonUtil` |
+| `hytaleopt.worldgenThreads` | vanilla (75% of cores); half in singleplayer | Threads used for terrain generation. Minimum 2. |
 | `hytaleopt.minCommonParallelism` | `8` | Minimum threads in the shared pool. `0` leaves it alone. |
 | `hytaleopt.spinThresholdNanos` | `1500000` | How long to busy-wait before each tick. |
 | `hytaleopt.minParallelGrain` | `16` | Minimum entities per parallel task. `1` = original behaviour. |
@@ -102,6 +107,8 @@ These are Java options (`-D...`, before `-jar`). In AMP they go in *Java and Mem
 ## If your server uses a lot of resources
 
 By far the biggest factor is view distance. `MaxViewRadius` defaults to 32 chunks, the maximum, and the server loads whatever each client asks for up to that limit. Lowering it to 12–16 in `config.json` cuts CPU and RAM usage a lot.
+
+The other big one is terrain generation while people explore: on a 2-core VPS it keeps both cores busy. If you know the play area, the world config can generate it in advance (`ChunkConfig.PregenerateRegion`), for example overnight.
 
 ## Tests
 

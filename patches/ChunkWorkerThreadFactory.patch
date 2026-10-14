@@ -1,0 +1,12 @@
+--- a/com/hypixel/hytale/server/worldgen/util/ChunkWorkerThreadFactory.java
++++ b/com/hypixel/hytale/server/worldgen/util/ChunkWorkerThreadFactory.java
+@@ -29,6 +29,9 @@
+       String threadName = String.format(this.threadNameFormat, this.factoryId, threadId);
+       ChunkWorkerThreadFactory.ChunkWorker workerThread = new ChunkWorkerThreadFactory.ChunkWorker(r, threadName, this.chunkGenerator);
+       workerThread.setDaemon(true);
++      // [hytaleopt] Same as the newer HytaleGenerator workers: lowest priority, so the world thread (and the game
++      // client in singleplayer) wins when the CPU is busy. Honoured on Windows; Linux ignores it by default.
++      workerThread.setPriority(Thread.MIN_PRIORITY);
+       return workerThread;
+    }
+ 

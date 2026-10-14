@@ -1,0 +1,15 @@
+--- a/com/hypixel/hytale/server/worldgen/chunk/ChunkGenerator.java
++++ b/com/hypixel/hytale/server/worldgen/chunk/ChunkGenerator.java
+@@ -70,7 +70,11 @@
+    private static final int CHUNK_BOUNDS_PADDING = 16;
+    private static final CompletableFuture<GeneratedChunk> NO_CHUNK = CompletableFuture.completedFuture(null);
+    private static final ThreadLocal<ChunkGeneratorResource> THREAD_LOCAL = ThreadLocal.withInitial(ChunkGeneratorResource::new);
+-   public static final int POOL_SIZE = Math.max(2, MathUtil.fastCeil(Runtime.getRuntime().availableProcessors() * 0.75F));
++   // [hytaleopt] Thread count can be set with hytaleopt.worldgenThreads (the plugin sets it to half the cores in
++   // singleplayer, where the game client renders on the same machine). Default and minimum are unchanged.
++   public static final int POOL_SIZE = Math.max(
++      2, Integer.getInteger("hytaleopt.worldgenThreads", MathUtil.fastCeil(Runtime.getRuntime().availableProcessors() * 0.75F))
++   );
+    @Nonnull
+    private final ThreadPoolExecutor executor;
+    @Nonnull

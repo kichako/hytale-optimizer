@@ -5,6 +5,8 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
@@ -29,12 +31,14 @@ import java.util.concurrent.ForkJoinPool;
  */
 public final class OptimizerTransformer implements ClassTransformer {
    static final String PREFIX = "[HytaleOptimizer] ";
-   static final String VERSION = "1.0.0";
+   static final String VERSION = "1.1.0";
    private static final String INDEX = "hytaleopt/patches.properties";
    private static final String CLASSES = "hytaleopt/classes/";
    private final Map<String, byte[]> replacements = new HashMap<>();
 
    public OptimizerTransformer() {
+      loadSettingsFile();
+      applySingleplayerDefaults();
       ensureCommonPoolParallelism();
       ClassLoader own = OptimizerTransformer.class.getClassLoader();
       Properties index = new Properties();
@@ -115,6 +119,49 @@ public final class OptimizerTransformer implements ClassTransformer {
             System.err.println(PREFIX + groupName + ": skipped, replacement classes are missing");
          }
       });
+   }
+
+   /**
+    * Reads hytaleopt.properties next to the plugin jar, if there is one, as an alternative to -D options. Mostly for
+    * singleplayer, where the game launches the server and there is no way to add JVM options. -D options still win.
+    */
+   private static void loadSettingsFile() {
+      try {
+         Path file = Path.of(OptimizerTransformer.class.getProtectionDomain().getCodeSource().getLocation().toURI()).resolveSibling("hytaleopt.properties");
+         if (!Files.isRegularFile(file)) {
+            return;
+         }
+
+         Properties settings = new Properties();
+         try (InputStream in = Files.newInputStream(file)) {
+            settings.load(new InputStreamReader(in, StandardCharsets.UTF_8));
+         }
+
+         for (String key : settings.stringPropertyNames()) {
+            if (key.startsWith("hytaleopt.") && System.getProperty(key) == null) {
+               System.setProperty(key, settings.getProperty(key).trim());
+            }
+         }
+
+         System.out.println(PREFIX + "Loaded settings from " + file.getFileName());
+      } catch (Exception e) {
+         System.err.println(PREFIX + "Could not read hytaleopt.properties: " + e);
+      }
+   }
+
+   /**
+    * In singleplayer the game client renders on the same machine as the server. World generation uses 75% of the
+    * cores by default, which competes with the client while exploring, so cap it at half (never below 2). Measured on
+    * 16 cores: the server used ~9 instead of ~11.6 cores while generating, and terrain generated ~30% slower.
+    * Dedicated servers keep the vanilla thread count.
+    */
+   private static void applySingleplayerDefaults() {
+      String command = System.getProperty("sun.java.command", "");
+      if (command.contains("--singleplayer") && System.getProperty("hytaleopt.worldgenThreads") == null) {
+         int threads = Math.max(2, (Runtime.getRuntime().availableProcessors() + 1) / 2);
+         System.setProperty("hytaleopt.worldgenThreads", Integer.toString(threads));
+         System.out.println(PREFIX + "Singleplayer: world generation limited to " + threads + " threads");
+      }
    }
 
    /**
